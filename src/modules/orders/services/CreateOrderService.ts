@@ -1,9 +1,8 @@
 import { inject, injectable } from 'tsyringe';
-
 import AppError from '@shared/errors/AppError';
-
 import IProductsRepository from '@modules/products/repositories/IProductsRepository';
 import ICustomersRepository from '@modules/customers/repositories/ICustomersRepository';
+import IUpdateProductsQuantityDTO from '@modules/products/dtos/IUpdateProductsQuantityDTO';
 import Order from '../infra/typeorm/entities/Order';
 import IOrdersRepository from '../repositories/IOrdersRepository';
 
@@ -20,13 +19,73 @@ interface IRequest {
 @injectable()
 class CreateOrderService {
   constructor(
+    @inject('OrdersRepository')
     private ordersRepository: IOrdersRepository,
+    @inject('ProductsRepository')
     private productsRepository: IProductsRepository,
+    @inject('CustomersRepository')
     private customersRepository: ICustomersRepository,
   ) {}
 
   public async execute({ customer_id, products }: IRequest): Promise<Order> {
-    // TODO
+    const checkCustomerExist = await this.customersRepository.findById(
+      customer_id,
+    );
+
+    if (!checkCustomerExist) {
+      throw new AppError('Customer does not exists.');
+    }
+
+    const findProducts = await this.productsRepository.findAllById(products);
+
+    if (findProducts.length !== products.length) {
+      throw new AppError('One or more products was not found.');
+    }
+
+    const updatedQuantities: IUpdateProductsQuantityDTO[] = [];
+
+    const updatedProducts = findProducts.map(findProduct => {
+      const orderProduct = products.find(
+        product => product.id === findProduct.id,
+      );
+
+      if (orderProduct) {
+        if (findProduct.quantity < orderProduct.quantity) {
+          throw new AppError('Insufficient product quantity');
+        }
+
+        const updatedQuantity = {
+          id: orderProduct.id,
+          quantity: findProduct.quantity - orderProduct.quantity,
+        };
+
+        updatedQuantities.push(updatedQuantity);
+
+        return {
+          ...findProduct,
+          quantity: orderProduct.quantity,
+        };
+      }
+
+      return findProduct;
+    });
+
+    await this.productsRepository.updateQuantity(updatedQuantities);
+
+    const produtcsDTO = updatedProducts.map(product => ({
+      product_id: product.id,
+      price: product.price,
+      quantity: product.quantity,
+    }));
+
+    const updatedOrder = {
+      customer: checkCustomerExist,
+      products: produtcsDTO,
+    };
+
+    const order = await this.ordersRepository.create(updatedOrder);
+
+    return order;
   }
 }
 
